@@ -2,25 +2,17 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'firebase/auth';
 import { getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot, arrayUnion, serverTimestamp } from 'firebase/firestore';
-// NOTA: 'howler' è stato rimosso per garantire stabilità, come discusso.
 
-// CONFIGURAZIONE FIREBASE - Queste variabili verranno iniettate dall'ambiente
-const firebaseConfig = {
-  apiKey: "AIzaSyC1lKVrPH2de6Zxhvl7olDUJX84jXRGieo",
-  authDomain: "tira-dadi-23da1.firebaseapp.com",
-  projectId: "tira-dadi-23da1",
-  storageBucket: "tira-dadi-23da1.firebasestorage.app",
-  messagingSenderId: "1089973461124",
-  appId: "1:1089973461124:web:26de6890848f0b6245e2d1",
-  measurementId: "G-4STSQHYW0K"
-};
-
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-dice-roller-app';
+// CORREZIONE: Legge le variabili globali da 'window' per compatibilità con Vercel
+const firebaseConfig = typeof window.__firebase_config !== 'undefined' ? JSON.parse(window.__firebase_config) : {};
+const appId = typeof window.__app_id !== 'undefined' ? window.__app_id : 'default-dice-roller-app';
 
 // Inizializzazione Firebase
-const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
-const db = getFirestore(app);
+// NOTA: Se firebaseConfig è vuoto, l'app funzionerà solo in locale con i dati di fallback.
+// Per il deploy, le credenziali Firebase devono essere configurate correttamente.
+const app = firebaseConfig.apiKey ? initializeApp(firebaseConfig) : null;
+const auth = app ? getAuth(app) : null;
+const db = app ? getFirestore(app) : null;
 
 // --- COMPONENTI UI ---
 
@@ -82,7 +74,7 @@ const LoginPage = ({ onJoinRoom }) => {
     };
 
     useEffect(() => {
-        if (!roomName || errors.roomName) {
+        if (!roomName || errors.roomName || !db) {
             setRoomStatus('unchecked');
             return;
         }
@@ -147,13 +139,11 @@ const RoomPage = ({ roomName, nick, onLeave }) => {
     const [roomData, setRoomData] = useState(null);
     const [dicePool, setDicePool] = useState([]);
     const [isRolling, setIsRolling] = useState(false);
-    // STATI AGGIORNATI per la nuova animazione
-    const [rollingDice, setRollingDice] = useState(null); // Solo per i dadi che rotolano
-    const [finalTotal, setFinalTotal] = useState(null); // Solo per il numero finale
+    const [rollingDice, setRollingDice] = useState(null);
+    const [finalTotal, setFinalTotal] = useState(null);
 
     const diceTypes = [4, 6, 8, 10, 12, 20, 100];
 
-    // Stile per l'animazione zoom-in del risultato
     const animationStyle = `
         @keyframes zoom-in {
             0% { transform: scale(0.5); opacity: 0; }
@@ -182,6 +172,7 @@ const RoomPage = ({ roomName, nick, onLeave }) => {
     const nickColor = useMemo(() => getNickColor(nick), [nick, getNickColor]);
 
     useEffect(() => {
+        if (!db) return;
         const roomRef = doc(db, `artifacts/${appId}/public/data/diceRooms`, roomName);
         const unsubscribe = onSnapshot(roomRef, (doc) => {
             if (doc.exists()) {
@@ -214,12 +205,11 @@ const RoomPage = ({ roomName, nick, onLeave }) => {
         setDicePool(newPool);
     };
     
-    // LOGICA DI LANCIO AGGIORNATA
     const handleRoll = async () => {
-        if (isRolling || dicePool.length === 0) return;
+        if (isRolling || dicePool.length === 0 || !db) return;
 
         setIsRolling(true);
-        setFinalTotal(null); // Pulisce il risultato precedente
+        setFinalTotal(null);
         
         const animationDuration = 3000;
         const updateInterval = 100;
@@ -228,7 +218,6 @@ const RoomPage = ({ roomName, nick, onLeave }) => {
         const intervalId = setInterval(() => {
             animationTime += updateInterval;
             
-            // Mostra solo i dadi con numeri che cambiano, senza "???"
             const tempRolls = dicePool.map(d => ({
                 ...d,
                 value: Math.floor(Math.random() * d.type) + 1
@@ -238,18 +227,15 @@ const RoomPage = ({ roomName, nick, onLeave }) => {
             if (animationTime >= animationDuration) {
                 clearInterval(intervalId);
                 
-                // Calcola il risultato finale
                 const finalRolls = dicePool.map(d => ({
                     ...d,
                     value: Math.floor(Math.random() * d.type) + 1
                 }));
                 const total = finalRolls.reduce((sum, r) => sum + r.value, 0);
                 
-                // Nasconde i dadi che rotolano e mostra solo il totale finale
                 setRollingDice(null);
                 setFinalTotal(total);
 
-                // Salva la cronologia
                 const newRoll = {
                     nick, nickColor, rolls: finalRolls, total,
                     timestamp: new Date(), id: Date.now() + Math.random().toString()
@@ -257,7 +243,6 @@ const RoomPage = ({ roomName, nick, onLeave }) => {
                 const roomRef = doc(db, `artifacts/${appId}/public/data/diceRooms`, roomName);
                 updateDoc(roomRef, { history: arrayUnion(newRoll) }).catch(console.error);
 
-                // Pulisce l'interfaccia dopo 3 secondi
                 setTimeout(() => {
                     setFinalTotal(null);
                     setDicePool([]);
@@ -319,7 +304,6 @@ const RoomPage = ({ roomName, nick, onLeave }) => {
                         </div>
                     </section>
                     
-                    {/* NUOVA SEZIONE RISULTATO */}
                     <footer className="text-center">
                         <button onClick={handleRoll} disabled={isRolling || dicePool.length === 0} className="w-full max-w-xs px-8 py-4 text-2xl font-bold text-white bg-red-600 rounded-lg shadow-lg transition-all duration-300 transform hover:bg-red-700 active:scale-95 disabled:bg-gray-400 disabled:cursor-not-allowed">
                             {isRolling ? 'Lancio...' : 'LANCIA!'}
@@ -375,9 +359,15 @@ export default function App() {
     const [isAuthReady, setIsAuthReady] = useState(false);
 
     useEffect(() => {
+        if (!auth) {
+            setIsAuthReady(true);
+            return;
+        };
+
         const initAuth = async () => {
             try {
-                const initialToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+                // CORREZIONE: Legge le variabili globali da 'window'
+                const initialToken = typeof window.__initial_auth_token !== 'undefined' ? window.__initial_auth_token : null;
                 if (initialToken) {
                     await signInWithCustomToken(auth, initialToken);
                 } else {
@@ -399,8 +389,8 @@ export default function App() {
     }, []);
 
     const handleJoinRoom = async (joinedRoomName, userNick, isNewRoom) => {
-        if (!isAuthReady || !userId) {
-            console.error("Autenticazione non ancora pronta.");
+        if (!isAuthReady || !userId || !db) {
+            console.error("Autenticazione o DB non pronti.");
             return;
         }
         
